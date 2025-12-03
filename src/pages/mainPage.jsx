@@ -371,7 +371,7 @@ export default function MainPage() {
         .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
 
         /* Publications grid */
-        .pubGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; }
+        .pubGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
         .pubCard { display: grid; grid-template-rows: 160px auto; gap: 10px; padding: 12px; border-radius: 16px; border: 1px solid var(--ring); background: #fff; box-shadow: var(--shadow); transition: transform .2s ease, box-shadow .2s ease; }
         .pubCard:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
         .pubImg { width: 100%; height: 160px; border-radius: 12px; border: 1px solid var(--ring); }
