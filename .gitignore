@@ -28,3 +28,6 @@ src/pages/mesh*.jsx
 
 # ignore mesh folder in public
 public/mesh/
+
+# Local-only audio embedding inversion demo audio
+# public/research/audio-embedding-inversion/audio/
