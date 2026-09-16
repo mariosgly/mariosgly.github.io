@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import './AudioInversion.css';
 
 type Metrics = { latent_mean_timestep_cosine?: number; latent_mean_timestep_l2?: number; mrstft_l1?: number };
-type Output = { name:string; encoder:string; runId:string; audioUrl:string; qualityBand:'high'|'middle'|'low'; qualityScore:number; metrics:Metrics };
-type Example = { id:string; genre:string; trackId:string; title:string; artist:string; trackUrl?:string; startSec:number; referenceUrl:string; outputs:Output[] };
+type MusicNNPrediction = { tag:string; probability?:number };
+type MusicNNPayload = { model?:string; predictions?:MusicNNPrediction[]; tags?:string[]; agreement?:{ top1?:boolean; top10Overlap?:number; top10Jaccard?:number; probabilityCosine?:number } };
+type Output = { name:string; encoder?:string; runId?:string; audioUrl:string; spectrogramUrl?:string; qualityBand:'high'|'middle'|'low'; qualityScore?:number; metrics:Metrics; musicnn?:MusicNNPayload };
+type Example = { id:string; genre:string; trackId:string; title:string; artist:string; trackUrl?:string; startSec:number; referenceUrl:string; referenceSpectrogramUrl?:string; spectrogramMetaUrl?:string; musicnn?:MusicNNPayload; outputs:Output[] };
 type Result = { run_id:string; encoder:string; genre?:string; num_examples:number; latent_mean_timestep_cosine_mean?:number; latent_mean_timestep_normalized_cosine_mean?:number; latent_mean_timestep_normalized_cosine_std?:number; mrstft_l1_mean?:number; mrstft_l1_std?:number };
 type ResultData = { overall:Result[]; by_genre:Result[]; summary?:{center:string;spread:string;display:string;population:string} };
 type PlotMetricKey = 'latent_mean_timestep_normalized_cosine' | 'mrstft_l1';
@@ -368,18 +370,89 @@ function ViolinBoxPlot({groups, metric, msdResults, testBestRuns, showValidation
   
   if(!series.length) return <div className="plot-empty">Awaiting distribution data for this selection.</div>;
 
-  const capAtZero = metric === 'latent_mean_timestep_normalized_cosine';
+  const capAtZero = false;
 
   let rawMin = Math.min(...series.map(item=>item.dist.histogram.min));
-  if (capAtZero) rawMin = Math.max(0, rawMin);
 
   const rawMax = Math.max(...series.map(item=>item.dist.histogram.max));
   const pad = Math.max((rawMax-rawMin)*0.08, 0.0005);
   
-  const min = capAtZero ? Math.max(0, rawMin - pad) : rawMin - pad;
+  const min = rawMin - pad;
   const max = rawMax + pad;
 
   return <HorizontalViolins series={series} min={min} max={max} capAtZero={capAtZero} hoverKey={hoverKey} setHoverKey={setHoverKey} testBestRuns={testBestRuns} showValidationBest={showValidationBest} />;
+}
+
+function formatTime(value:number) {
+  if(!Number.isFinite(value)) return '0:00';
+  const minutes = Math.floor(value / 60);
+  const seconds = Math.floor(value % 60);
+  return `${minutes}:${String(seconds).padStart(2,'0')}`;
+}
+
+function SpectrogramPlayer({audioUrl,spectrogramUrl,label}:{audioUrl:string; spectrogramUrl?:string; label:string}) {
+  const audioRef = useRef<HTMLAudioElement|null>(null);
+  const [duration,setDuration] = useState(0);
+  const [currentTime,setCurrentTime] = useState(0);
+  const [playing,setPlaying] = useState(false);
+  const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
+
+  const seek = (clientX:number, target:HTMLElement) => {
+    const audio = audioRef.current;
+    if(!audio || !duration) return;
+    const rect = target.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+    audio.currentTime = ratio * duration;
+    setCurrentTime(audio.currentTime);
+  };
+
+  const toggle = () => {
+    const audio = audioRef.current;
+    if(!audio) return;
+    if(audio.paused) audio.play();
+    else audio.pause();
+  };
+
+  return <div className={`spectrogram-player${spectrogramUrl?' has-spectrogram':''}`}>
+    <audio
+      ref={audioRef}
+      preload="none"
+      src={audioUrl}
+      onLoadedMetadata={event=>setDuration(event.currentTarget.duration || 0)}
+      onTimeUpdate={event=>setCurrentTime(event.currentTarget.currentTime || 0)}
+      onPlay={()=>setPlaying(true)}
+      onPause={()=>setPlaying(false)}
+      onEnded={()=>setPlaying(false)}
+    />
+    {spectrogramUrl ? <button
+      className="spectrogram-surface"
+      type="button"
+      aria-label={`Seek ${label}`}
+      onClick={event=>seek(event.clientX,event.currentTarget)}
+      style={{backgroundImage:`url(${spectrogramUrl})`}}
+    >
+      <span className="playhead" style={{left:`${progress*100}%`}} />
+    </button> : <audio controls preload="none" src={audioUrl} />}
+    {spectrogramUrl && <div className="spectrogram-controls">
+      <button type="button" className="play-toggle" aria-label={playing?'Pause':'Play'} onClick={toggle}>{playing?'II':'▶'}</button>
+      <span>{formatTime(currentTime)} / {formatTime(duration)}</span>
+    </div>}
+  </div>;
+}
+
+function MusicNNTags({musicnn}:{musicnn?:MusicNNPayload}) {
+  const predictions = musicnn?.predictions?.filter(item=>item?.tag).slice(0,10) || [];
+  if(!predictions.length) return null;
+  return <div className="musicnn-tags">
+    <span>MusicNN</span>
+    <div>
+      {predictions.map(item=><em key={item.tag}>{item.tag}{typeof item.probability==='number'&&<small>{Math.round(item.probability*100)}%</small>}</em>)}
+    </div>
+    {musicnn?.agreement&&<p>
+      {typeof musicnn.agreement.top10Overlap==='number'&&`tag overlap ${musicnn.agreement.top10Overlap}/10`}
+      {typeof musicnn.agreement.probabilityCosine==='number'&&` · tag-vector cosine ${musicnn.agreement.probabilityCosine.toFixed(2)}`}
+    </p>}
+  </div>;
 }
 
 export default function AudioInversion() {
@@ -402,6 +475,15 @@ export default function AudioInversion() {
     fetch('/research/audio-embedding-inversion/data/msd_5sec_reconstruction_scores_site.json').then(r=>r.ok?r.json():null).catch(()=>null),
     fetch('/research/audio-embedding-inversion/data/msd_5sec_reconstruction_plot_data.json').then(r=>r.ok?r.json():emptyPlot).catch(()=>emptyPlot),
   ]).then(([demo,msd,plot])=>setData({...demo,msdResults:msd||demo.msdResults||empty.msdResults,plotData:plot||emptyPlot})); },[]);
+
+  useEffect(()=>{
+    const id = window.location.hash.slice(1);
+    if(!id) return;
+    const timer = window.setTimeout(()=>{
+      document.getElementById(id)?.scrollIntoView({block:'start'});
+    }, 80);
+    return ()=>window.clearTimeout(timer);
+  },[data.examples.length,data.msdResults.overall.length,data.plotData.groups.length]);
   
   const availableEncoders = useMemo(()=>encoderOrder.filter(name=>data.examples.some(example=>example.outputs.some(output=>output.name===name))),[data]);
   const activeRankingEncoder = availableEncoders.includes(rankingEncoder) ? rankingEncoder : (availableEncoders[0] || rankingEncoder);
@@ -453,13 +535,19 @@ export default function AudioInversion() {
     <section className="publication-hero" id="top">
       <h1 className="post-title">How Much Audio Is Left In An Embedding?</h1>
       <h1 className="post-title">An Inversion Audit Of Audio Encoders</h1>
-      <p className="publication-subtitle">Registration-free listening benchmark for what frozen audio encoders preserve</p>
-      <div className="publication-authors"><a href="https://mariosgly.github.io/" target="_blank" rel="noreferrer">Marios Glytsos</a><sup>1</sup>
+      <div className="publication-authors"><a href="https://mariosgly.github.io/" target="_blank" rel="noreferrer">Marios Glytsos</a>
       ,{" "}
-        <a href="https://brianmcfee.net/" target="_blank" rel="noreferrer">Brian McFee</a><sup>2</sup>
+        <a href="https://brianmcfee.net/" target="_blank" rel="noreferrer">Brian McFee</a>
       </div>
-      <div className="publication-affiliations"><div className="affil-line"><sup>1</sup> Music And Audio Research Laboratory, New York University, USA</div></div>
-      <div className="publication-icons"><a className="btn" href="#results">Scores</a><a className="btn" href="#demo">Demo</a><a className="btn" href="#abstract">Abstract</a></div>
+      <div className="publication-affiliations"><div className="affil-line"> Music And Audio Research Laboratory, New York University, USA</div></div>
+      <div className="publication-icons">
+        <a className="btn github-btn" href="https://github.com/mariosgly/audio-embedding-inversion" target="_blank" rel="noreferrer" aria-label="GitHub repository">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.1 3.29 9.41 7.86 10.94.58.1.79-.25.79-.56v-2.15c-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.75 2.69 1.25 3.35.95.1-.74.4-1.25.73-1.54-2.55-.29-5.23-1.28-5.23-5.68 0-1.25.45-2.28 1.18-3.08-.12-.29-.51-1.46.11-3.04 0 0 .96-.31 3.16 1.18.92-.25 1.9-.38 2.88-.39.98 0 1.96.14 2.88.39 2.19-1.49 3.15-1.18 3.15-1.18.62 1.58.23 2.75.11 3.04.74.8 1.18 1.83 1.18 3.08 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/></svg>
+          GitHub
+        </a>
+        <a className="btn" href="#demo">Demo</a>
+        <a className="btn" href="#results">Results</a>
+      </div>
       <p className="tldr"><strong>tl;dr:</strong> We ask how much of the original audio survives in a frozen embedding by adapting a pretrained diffusion architecture to reconstruct 5-sec clips from different encoders</p>
     </section>
 
@@ -469,7 +557,7 @@ export default function AudioInversion() {
 
     <section className="abstract" id="abstract">
       <h2>Abstract</h2>
-      <p>Will copy paste the Abstract from the paper.</p>
+      <p>Pretrained audio encoders are reused for downstream tasks that are often unknown when the encoder is trained, so their usefulness depends partly on which signal properties survive the pretext objective. We study this retained information through paired source reconstruction. Using a shared Stable Audio Open latent diffusion decoder, we reconstruct five-second, 44.1-kHz stereo music from frozen representations produced by supervised classifiers (VGGish, ConvNeXt), an audio-text contrastive model (CLAP), and a waveform-reconstruction model (EnCodec). These objectives impose different pressures to preserve source detail, while their exposed interfaces vary substantially in temporal and spectral resolution. Evaluating on the Million Song Dataset (MSD), we find clear differences in reconstructability across encoder families, while within encoder comparisons show improved recovery when finer temporal or spectral structure is exposed. Even compressed task oriented embeddings support reconstructions that preserve measurable source specificity and high level musical content.</p>
     </section>
 
     <section className="results" id="results">
@@ -516,7 +604,7 @@ export default function AudioInversion() {
         
         <p className="table-caption">
           {activeEncoder?`${encoderName(activeEncoder)} selected · all variants shown · test-cosine and validation-loss picks marked`:'Best checkpoint per encoder, selected by overall test-set latent cosine'} 
-          {viewMode === 'plot' ? ' · axis starts at 0' : ' · sorted by latent cosine · values are mean ± sample SD'}
+          {viewMode === 'plot' ? ' · axis shows the full metric range' : ' · sorted by latent cosine · values are mean ± sample SD'}
         </p>
 
         {viewMode === 'plot' ? (
@@ -565,15 +653,21 @@ export default function AudioInversion() {
     </section>
 
     <section className="listening" id="demo">
-      <div className="section-heading"><div><p className="section-number">Listening Demo</p><h2>Reference in, reconstructions out.</h2></div><p>Pick a genre, then play the source clip beside each encoder’s reconstruction. Quality bands are ranked by latent cosine.</p></div>
+      <div className="section-heading"><div><p className="section-number">Listening Demo</p><h2>Reference in, reconstructions out.</h2></div></div>
       <div className="controls">
         <label>Genre<select value={genre} onChange={e=>updateGenre(e.target.value)}><option>All genres</option>{genreOrder.map(item=><option key={item}>{item}</option>)}</select></label>
         <label>Cosine rank using<select value={activeRankingEncoder} onChange={e=>updateRankingEncoder(e.target.value)}>{(availableEncoders.length?availableEncoders:encoderOrder).map(item=><option key={item}>{item}</option>)}</select></label>
         <label>Cosine band<select value={band} onChange={e=>updateBand(e.target.value)}><option value="all">All bands</option><option value="high">Best third</option><option value="middle">Middle third</option><option value="low">Lower third</option></select></label>
       </div>
       {current ? <article className="example-card">
-        <div className="source-copy"><span>{current.genre.toUpperCase()} · {current.trackId}</span><div><p className="source-label">Reference</p><h3>{current.title}</h3><p>{current.artist} · starts at {current.startSec.toFixed(1)}s</p></div><audio controls preload="none" src={current.referenceUrl}/>{current.trackUrl&&<a className="credit" href={current.trackUrl} target="_blank" rel="noreferrer">Track details ↗</a>}</div>
-        <div className="encoder-grid">{encoderOrder.map((name,position)=>{const output=current.outputs.find(item=>item.name===name);const cosineBand=output?(cosineBands[name]?.[current.id] ?? output.qualityBand):undefined;return <div className="encoder" key={name}><span>{String(position+1).padStart(2,'0')}</span><div className="encoder-title"><strong>{name}</strong>{cosineBand&&<em className={`band ${cosineBand}`}>{cosineBand}</em>}</div>{output?<><audio controls preload="none" src={output.audioUrl}/><div className="mini-metrics"><span>cos {fmt(output.metrics.latent_mean_timestep_cosine)}</span><span>MR-STFT {fmt(output.metrics.mrstft_l1)}</span></div></>:<p className="pending">Awaiting export</p>}</div>})}</div>
+        <div className="source-copy">
+          <span>{current.genre.toUpperCase()} · {current.trackId}</span>
+          <div><p className="source-label">Reference</p><h3>{current.title}</h3><p>{current.artist} · starts at {current.startSec.toFixed(1)}s</p></div>
+          <SpectrogramPlayer audioUrl={current.referenceUrl} spectrogramUrl={current.referenceSpectrogramUrl} label={`${current.title} reference`} />
+          <MusicNNTags musicnn={current.musicnn} />
+          {current.trackUrl&&<a className="credit" href={current.trackUrl} target="_blank" rel="noreferrer">Track details ↗</a>}
+        </div>
+        <div className="encoder-grid">{encoderOrder.map((name,position)=>{const output=current.outputs.find(item=>item.name===name);const cosineBand=output?(cosineBands[name]?.[current.id] ?? output.qualityBand):undefined;return <div className="encoder" key={name}><div className="encoder-title"><strong>{name}</strong>{cosineBand&&<em className={`band ${cosineBand}`}>{cosineBand}</em>}</div>{output?<><SpectrogramPlayer audioUrl={output.audioUrl} spectrogramUrl={output.spectrogramUrl} label={`${current.title} ${name}`} /><MusicNNTags musicnn={output.musicnn} /><div className="mini-metrics"><span>cos {fmt(output.metrics.latent_mean_timestep_cosine)}</span><span>MR-STFT {fmt(output.metrics.mrstft_l1)}</span></div></>:<p className="pending">Awaiting export</p>}</div>})}</div>
       </article>:<div className="empty-state"><strong>{data.generatedAt?'No clips match these filters.':'Experiment outputs have not been exported yet.'}</strong><p>Run the bundle exporter to populate audio and metrics.</p></div>}
       <div className="pager"><button disabled={!filtered.length} onClick={()=>setIndex((safeIndex-1+filtered.length)%filtered.length)}>← Previous</button><span>{filtered.length?`${safeIndex+1} / ${filtered.length}`:'0 / 0'}</span><button disabled={!filtered.length} onClick={()=>setIndex((safeIndex+1)%filtered.length)}>Next →</button></div>
     </section>
