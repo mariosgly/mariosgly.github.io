@@ -38,6 +38,16 @@ const LINKS = {
 
 // Demo publications — replace with your real data
 const PUBLICATIONS = [
+  {
+    id: "pub-4",
+    title: "How Much Audio Is Left In An Embedding? An Inversion Audit Of Audio Encoders",
+    venue: "ICASSP",
+    year: 2027,
+    image: "/research/audio-embedding-inversion/overview_figure.svg",
+    link: "https://arxiv.org/abs/2610.12250",
+    website: "/research/audio-embedding-inversion/",
+    status: "Under submission",
+  },
     {
     id: "pub-3",
     title: "Category-Level 6D Object Pose Estimation in Agricultural Settings Using a Lattice-Deformation Framework and Diffusion-Augmented Synthetic Data",
@@ -588,7 +598,11 @@ export default function MainPage() {
                     <h4 className="pubTitle">{p.title}</h4>
                     <div className="pubVenue">{p.venue} · {p.year}</div>
                     <div className="pubRow">
-                      <button className="copyBtn" onClick={() => handleCopy(p.bibtex)}>Copy BibTeX</button>
+                      {p.status ? (
+                        <span className="pubVenue">{p.status}</span>
+                      ) : (
+                        <button className="copyBtn" onClick={() => handleCopy(p.bibtex)}>Copy BibTeX</button>
+                      )}
                       <a
                         className="linkItem"
                         href={p.link}
@@ -596,6 +610,9 @@ export default function MainPage() {
                         rel="noopener noreferrer"
                       >Paper</a>
                     </div>
+                    {p.website && (
+                      <a className="linkItem" href={p.website}>Project website</a>
+                    )}
                   </div>
                 </article>
               ))}
